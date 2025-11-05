@@ -346,6 +346,13 @@ int main()
 				armies.emplace_back(available_policies[usa_index]);
 				armies.emplace_back(available_policies[enemy_index]);
 			}
+			// Simulate 50 years
+			for (int year = 0; year < 50; year++) {
+				add_year();
+			}
+
+			std::cout << "Simulated 50 years.\n";
+
 			std::cout << "Added two standard policies: USA and ENEMY.\n";
 			std::cout << "USA policy details:\n";
 			std::cout << "  Conscription Age: " << available_policies[usa_index].age_of_conscription << "\n";
@@ -353,7 +360,7 @@ int main()
 			std::cout << "  Life Expectancy: " << available_policies[usa_index].life_expectancy << "\n";
 			std::cout << "  Age of Pregnancy Start: " << available_policies[usa_index].allowed_pregnancy_age_start << "\n\n";
 
-			std::cout << "Added 100 soldiers for each policy.\n";
+			std::cout << "Added 100 soldiers for each policy.\n\n";
 
 			std::cout << "ENEMY policy details:\n";
 			std::cout << "  Conscription Age: " << available_policies[enemy_index].age_of_conscription << "\n";
@@ -361,13 +368,7 @@ int main()
 			std::cout << "  Life Expectancy: " << available_policies[enemy_index].life_expectancy << "\n";
 			std::cout << "  Age of Pregnancy Start: " << available_policies[enemy_index].allowed_pregnancy_age_start << "\n\n";
 
-			// Simulate 50 years
-			for (int year = 0; year < 50; year++) {
-				add_year();
-			}
-
-			std::cout << "Simulated 50 years.\n";
-			std::cout << "Now simulating war between USA and ENEMY...\n";
+			std::cout << "Now simulating war between USA and ENEMY after 50 years of reproduction...\n";
 			std::cout << "The winner of the war is " << who_wins_conventional_war(available_policies[usa_index], available_policies[enemy_index]).name << ".\n";
 
 		}
