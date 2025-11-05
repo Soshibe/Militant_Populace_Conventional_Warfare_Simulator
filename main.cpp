@@ -137,6 +137,7 @@ void add_year()
 			number_of_babies_this_year++;
 			number_of_pregnancies_this_year++;
 			armies[i].number_of_pregnancies++;
+			armies[i].number_of_children++;
 			new_soldiers.push_back(soldiers.fealty);
 			if ((static_cast<double>(rand()) / RAND_MAX) < soldiers.fealty.twinning_chance) {
 				number_of_babies_this_year++;
