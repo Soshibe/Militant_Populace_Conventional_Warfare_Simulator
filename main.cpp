@@ -4,10 +4,17 @@
 #include <string>
 #include <cstdlib>
 #include <sstream>
+#include <thread>
+#include <algorithm>
+#include <limits>
+#include <array>
+#include <numeric>
+#include <unordered_set>
 
 double simulation_age_years;
 double simulation_birthtime;
-
+bool random_wars_enabled = false;
+int threads = 4;
 
 class policy {
 public:
@@ -15,22 +22,28 @@ public:
 	std::string name = "Global Policy";
 	double age_of_conscription = 13;
 	double age_of_retirement = 35;
-	double life_expectancy = 65;
+	double life_expectancy = 25;
 	double fertile_age_start = 10;
 	double fertile_age_end = 50;
 	double allowed_pregnancy_age_start = 10;
 	double allowed_pregnancy_age_end = 50;
 	double allowed_number_of_children = 300;
-	double pregnancies_per_lifetime = 30;
+	double pregnancies_per_lifetime = 40;
 	double years_between_pregnancies = 1;
 	double twinning_chance = 0.1;
+	double learning_rate_mutation_range = 0.05;
+	double learning_rate_median = 50.0;
+	double learning_rate_range = 100.0;
+	double conscription_minimum_learning_rate = 0.0;
+	double chance_to_declare_war_per_year = 0.01;
+	double minimum_age_genocide = 0;
+	double maximum_age_genoicide = 110;
+	double chance_to_commit_genocide_during_war_success = 80.0;
 	bool pacifist = false;
 };
 
 std::vector<policy> available_policies;
-policy global_policy;
-policy your_policy;
-policy enemy_policy;
+policy global_policy;	
 
 void setup()
 {
@@ -42,15 +55,20 @@ void setup()
 class soldier {
 	double birthtime;
 public:
+	double learning_rate = 0;
 	double number_of_children = 0;
 	double number_of_pregnancies = 0;
 	policy fealty;
 	soldier(policy conscribed_policy) {
 		fealty = conscribed_policy;
 		// Fix: Use simulation time, not wall-clock time
+		bool positive_or_negative = (rand() % 2 == 0) ? 1 : -1;
+		bool positive_or_negative2 = (rand() % 2 == 0) ? 1 : -1;
+		learning_rate = fealty.learning_rate_median + (positive_or_negative * ((static_cast<double>(rand()) / RAND_MAX) - 0.5) * (fealty.learning_rate_range / 2)); // Randomize learning rate around median within range
+		learning_rate += positive_or_negative2 * ((static_cast<double>(rand()) / RAND_MAX) * fealty.learning_rate_mutation_range); // Apply mutation
 		birthtime = simulation_age_years * 31557600 + simulation_birthtime;
 	}
-	double get_age_years()
+	double get_age_years() const
 	{
 		double current_time = simulation_age_years * 31557600 + simulation_birthtime;
 		return (current_time - birthtime) / 31557600;
@@ -94,6 +112,314 @@ policy who_wins_conventional_war(policy a, policy b)
 }
 
 
+double calculate_average_learning_rate()
+{
+	if (armies.empty()) return 0.0;
+	double total_learning_rate = 0.0;
+	for (const auto& soldier : armies) {
+		total_learning_rate += soldier.learning_rate;
+	}
+	return total_learning_rate / armies.size();
+}
+
+double smartest_soldier_learning_rate()
+{
+	if (armies.empty()) return 0.0;
+	double max_learning_rate = armies[0].learning_rate;
+	for (const auto& soldier : armies) {
+		if (soldier.learning_rate > max_learning_rate) {
+			max_learning_rate = soldier.learning_rate;
+		}
+	}
+	return max_learning_rate;
+}
+
+double dumbest_soldier_learning_rate()
+{
+	if (armies.empty()) return 0.0;
+	double min_learning_rate = armies[0].learning_rate;
+	for (const auto& soldier : armies) {
+		if (soldier.learning_rate < min_learning_rate) {
+			min_learning_rate = soldier.learning_rate;
+		}
+	}
+	return min_learning_rate;
+}
+
+double calculate_policy_learning_rate_median(const policy& pol)
+{
+	double total_learning_rate = 0.0;
+	int count = 0;
+	for (const auto& soldier : armies) {
+		if (soldier.fealty.name == pol.name) {
+			total_learning_rate += soldier.learning_rate;
+			count++;
+		}
+	}
+	if (count == 0) return 0.0;
+	return total_learning_rate / count;
+}
+
+double calculate_policy_learning_rate_range(const policy& pol)
+{
+	double min_learning_rate = std::numeric_limits<double>::max();
+	double max_learning_rate = std::numeric_limits<double>::lowest();
+	for (const auto& soldier : armies) {
+		if (soldier.fealty.name == pol.name) {
+			if (soldier.learning_rate < min_learning_rate) {
+				min_learning_rate = soldier.learning_rate;
+			}
+			if (soldier.learning_rate > max_learning_rate) {
+				max_learning_rate = soldier.learning_rate;
+			}
+		}
+	}
+	if (min_learning_rate == std::numeric_limits<double>::max() || max_learning_rate == std::numeric_limits<double>::lowest()) {
+		return 0.0;
+	}
+	return max_learning_rate - min_learning_rate;
+}
+
+void print_fealty_intelligence_distribution()
+{
+	std::cout << "Fealty Intelligence Distribution:\n";
+	int pol_index = 0;
+	for (const auto& pol : available_policies) {
+		double total_learning_rate = 0.0;
+		int count = 0;
+		for (const auto& soldier : armies) {
+			if (soldier.fealty.name == pol.name) {
+				total_learning_rate += soldier.learning_rate;
+				count++;
+			}
+		}
+		if (count > 0) {
+			std::cout << "Policy: " << pol.name << ", Average Learning Rate: " << (total_learning_rate / count) << ", Number of Soldiers: " << count << "\n";
+			available_policies[pol_index].learning_rate_median = calculate_policy_learning_rate_median(pol);
+			available_policies[pol_index].learning_rate_range = calculate_policy_learning_rate_range(pol);
+		}
+		else {
+			std::cout << "Policy: " << pol.name << ", No soldiers.\n";
+		}
+	}
+}
+
+void print_most_intelligent_policy()
+{
+	if (available_policies.empty()) return;
+	policy* smartest_policy = &available_policies[0];
+	for (auto& pol : available_policies) {
+		if (calculate_policy_learning_rate_median(pol) > calculate_policy_learning_rate_median(*smartest_policy)) {
+			smartest_policy = &pol;
+		}
+	}
+	std::cout << "Most Intelligent Policy: " << smartest_policy->name << " with Average Learning Rate: " << calculate_policy_learning_rate_median(*smartest_policy) << "\n";
+}
+
+void print_alarm_if_mentally_retarded()
+{
+	double average_learning_rate = calculate_average_learning_rate();
+	if (average_learning_rate < 50.0) {
+		std::cout << "!!ALARM: Average learning rate has fallen below 50.0! Civilization is at risk of collapse, immediate action required!\n";
+		std::cout << "Consider implementing policies to increase learning rates and intelligence.\n";
+		std::cout << "Encourage low breeding ages, low conscription intelligence requirements.\n";
+		std::cout << "EXTREME PROBLEM: Earth's population has become mentally retarded!\n";
+	}
+}
+
+void help()
+{
+	std::cout << "Type commands to interact with the simulation:\n";
+	std::cout << "Type 'help' to see this message again.\n";
+	std::cout << "Type threads <number> to set the number of threads for parallel processing (default is 4).\n";
+	std::cout << "Type STANDARD_WAR to advance 50 years with USA and ENEMY policies and simulate a war between them.\n";
+	std::cout << "Press Enter to advance one year in the simulation, \n";
+	std::cout << "type policy <name> to add a new policy type, \n";
+	std::cout << "type add <number> <policy> to add soldiers with fealty sworn to a specific policy, \n";
+	std::cout << "type sex_age <policy> <age> to set the reproductive age for a policy, \n";
+	std::cout << "type intelligence <policy> <median> <range> to set the intelligence median and range for a policy, \n";
+	std::cout << "type warchoice <policy> <chance> to set the chance to declare war per year for a policy (in percent), \n";
+	std::cout << "type conscription_age <policy> <age> to set the conscription age for a policy, \n";
+	std::cout << "type retirement_age <policy> <age> to set the retirement age for a policy, \n";
+	std::cout << "type life_expectancy <policy> <age> to set the life expectancy for a policy, \n";
+	std::cout << "type fertility_range <policy> <start_age> <end_age> to set the fertility range for a policy, \n";
+	std::cout << "type pregnancies_per_lifetime <policy> <number> to set the number of pregnancies per lifetime for a policy, \n";
+	std::cout << "type number_of_children <policy> <number> to set the allowed number of children per soldier for a policy, \n";
+	std::cout << "type random_war to allow wars to occur randomly between existing policies based on their chance to declare war per year, \n";
+	std::cout << "or type war <policy1> <policy2> to simulate a war between two policies.\n";
+}
+
+void add_two_standard_policies()
+{
+	policy usa_policy;
+	usa_policy.name = "USA";
+	usa_policy.age_of_conscription = 18;
+	usa_policy.age_of_retirement = 45;
+	usa_policy.life_expectancy = 79;
+	usa_policy.fertile_age_start = 15;
+	usa_policy.fertile_age_end = 45;
+	usa_policy.allowed_pregnancy_age_start = 15;
+	usa_policy.allowed_pregnancy_age_end = 45;
+	usa_policy.allowed_number_of_children = 10;
+	usa_policy.pregnancies_per_lifetime = 5;
+	usa_policy.conscription_minimum_learning_rate = 80.0;
+	usa_policy.learning_rate_median = 70.0;
+	usa_policy.learning_rate_range = 50.0;
+	usa_policy.chance_to_declare_war_per_year = 0.05;
+	usa_policy.maximum_age_genoicide = 65;
+	usa_policy.minimum_age_genocide = 15;
+
+	available_policies.push_back(usa_policy);
+	policy enemy_policy;
+	enemy_policy.name = "ENEMY";
+	enemy_policy.age_of_conscription = 13;
+	enemy_policy.age_of_retirement = 60;
+	enemy_policy.life_expectancy = 65;
+	enemy_policy.fertile_age_start = 10;
+	enemy_policy.fertile_age_end = 50;
+	enemy_policy.allowed_pregnancy_age_start = 10;
+	enemy_policy.allowed_pregnancy_age_end = 50;
+	enemy_policy.allowed_number_of_children = 300;
+	enemy_policy.pregnancies_per_lifetime = 30;
+	enemy_policy.learning_rate_median = 40.0;
+	enemy_policy.learning_rate_range = 25.0;
+	enemy_policy.conscription_minimum_learning_rate = 0.0;
+	enemy_policy.chance_to_declare_war_per_year = 0.01;
+	enemy_policy.maximum_age_genoicide = 70;
+	enemy_policy.minimum_age_genocide = 7;
+	available_policies.push_back(enemy_policy);
+}
+/// <summary>
+/// ////////
+/// th
+/// </summary>
+/// <returns></returns>
+/// 
+
+int soldiers_in_policy(policy pol)
+{
+	int count = 0;
+	for (const auto& soldier : armies) {
+		if (soldier.fealty.name == pol.name) {
+			count++;
+		}
+	}
+	return count;
+}
+
+int maxint(int a, int b)
+{
+	return (a > b) ? a : b;
+}
+
+double percent_to_kill(int soldiers_in_policyA, int soldiers_in_policyB) // assumes soldiers_in_policyA are the losers in the context.
+{
+	double median = 50.0;
+	double range = 100.0;
+	int max_delta_factor_of_army_size_difference = maxint(soldiers_in_policyA, soldiers_in_policyB) / 10;
+	
+	int difference_in_army_size = abs(soldiers_in_policyA - soldiers_in_policyB);
+	bool maxxed = difference_in_army_size > max_delta_factor_of_army_size_difference;
+	if (maxxed) {
+		return median + (range / 2);
+	}
+	else {
+		return median + ((difference_in_army_size / static_cast<double>(max_delta_factor_of_army_size_difference)) * (range / 2));
+	}
+	
+}
+
+void random_war_kill_most_losers_kill_some_winners()
+{
+	policy random_policyA;
+	policy random_policyB;
+	int total_policies = available_policies.size();
+	int random_indexA = rand() % total_policies;
+	int random_indexB = rand() % total_policies;
+	while(random_indexB == random_indexA) {
+		random_indexB = rand() % total_policies;
+	}
+	random_policyA = available_policies[random_indexA];
+	random_policyB = available_policies[random_indexB];
+	policy winner = who_wins_conventional_war(random_policyA, random_policyB);
+	policy loser = (winner.name == random_policyA.name) ? random_policyB : random_policyA;
+	std::vector<size_t> to_erase;
+	double percent_kill_losers = percent_to_kill(soldiers_in_policy(loser), soldiers_in_policy(winner));
+	for (size_t i = 0; i < armies.size(); ++i) {
+		auto& soldiers = armies[i];
+		if (soldiers.fealty.name == winner.name && soldiers.learning_rate > soldiers.fealty.conscription_minimum_learning_rate && soldiers.get_age_years()<soldiers.fealty.age_of_retirement && soldiers.get_age_years() > soldiers.fealty.age_of_conscription) {
+			if ((static_cast<double>(rand()) / RAND_MAX) < (1-(percent_kill_losers / 100))) {
+				to_erase.push_back(i);
+			}
+		}
+		else {
+			if(soldiers.fealty.name == loser.name && soldiers.learning_rate > soldiers.fealty.conscription_minimum_learning_rate && soldiers.get_age_years() < soldiers.fealty.age_of_retirement && soldiers.get_age_years() > soldiers.fealty.age_of_conscription)
+			if ((static_cast<double>(rand()) / RAND_MAX) < (percent_kill_losers/100)) {
+				to_erase.push_back(i);
+			}
+		}
+	}
+
+	std::cout << "A war has occurred between " << random_policyA.name << " and " << random_policyB.name << ". The winner is " << winner.name << ".\n";
+	std::cout << "Number of soldiers killed in the war: " << to_erase.size() << "\n";
+	std::cout << "Number of soldiers in Policy " << random_policyA.name << " died: ";
+	int countA = 0;
+	for(auto idx : to_erase) {
+		if(armies[idx].fealty.name == random_policyA.name) {
+			countA++;
+		}
+	}
+	std::cout << countA << "\n";
+	std::cout << "Number of soldiers in Policy " << random_policyB.name << " died: ";
+	int countB = to_erase.size() - countA;
+	std::cout << countB << "\n";
+
+	// Remove soldiers who died (from back to front to avoid index shifting)
+	for (auto it = to_erase.rbegin(); it != to_erase.rend(); ++it) {
+		armies.erase(armies.begin() + *it);
+	}
+}
+
+void war_kill_most_losers_kill_some_winners(policy random_policyA, policy random_policyB)
+{
+	policy winner = who_wins_conventional_war(random_policyA, random_policyB);
+	policy loser = (winner.name == random_policyA.name) ? random_policyB : random_policyA;
+	std::vector<size_t> to_erase;
+	double percent_kill_losers = percent_to_kill(soldiers_in_policy(loser), soldiers_in_policy(winner));
+	for (size_t i = 0; i < armies.size(); ++i) {
+		auto& soldiers = armies[i];
+		if (soldiers.fealty.name == winner.name && soldiers.learning_rate > soldiers.fealty.conscription_minimum_learning_rate && soldiers.get_age_years() < soldiers.fealty.age_of_retirement && soldiers.get_age_years() > soldiers.fealty.age_of_conscription) {
+			if ((static_cast<double>(rand()) / RAND_MAX) < (1 - (percent_kill_losers / 100))) {
+				to_erase.push_back(i);
+			}
+		}
+		else {
+			if (soldiers.fealty.name == loser.name && soldiers.learning_rate > soldiers.fealty.conscription_minimum_learning_rate && soldiers.get_age_years() < soldiers.fealty.age_of_retirement && soldiers.get_age_years() > soldiers.fealty.age_of_conscription)
+				if ((static_cast<double>(rand()) / RAND_MAX) < (percent_kill_losers / 100)) {
+					to_erase.push_back(i);
+				}
+		}
+	}
+
+	std::cout << "A war has occurred between " << random_policyA.name << " and " << random_policyB.name << ". The winner is " << winner.name << ".\n";
+	std::cout << "Number of soldiers killed in the war: " << to_erase.size() << "\n";
+	std::cout << "Number of soldiers in Policy " << random_policyA.name << " died: ";
+	int countA = 0;
+	for (auto idx : to_erase) {
+		if (armies[idx].fealty.name == random_policyA.name) {
+			countA++;
+		}
+	}
+	std::cout << countA << "\n";
+	std::cout << "Number of soldiers in Policy " << random_policyB.name << " died: ";
+	int countB = to_erase.size() - countA;
+	std::cout << countB << "\n";
+
+	// Remove soldiers who died (from back to front to avoid index shifting)
+	for (auto it = to_erase.rbegin(); it != to_erase.rend(); ++it) {
+		armies.erase(armies.begin() + *it);
+	}
+}
 
 void add_year()
 {
@@ -110,51 +436,138 @@ void add_year()
 	double number_of_pregnancies_this_year = 0;
 	double number_of_fertile_soldiers = 0;
 
-	for (size_t i = 0; i < armies.size(); ++i) {
-		auto& soldiers = armies[i];
-		double age = soldiers.get_age_years();
-		if (age >= 9 && age < 10) {
-			number_of_new_fertile_soldiers++;
-		}
-		if (age >= soldiers.fealty.age_of_conscription && age < soldiers.fealty.age_of_conscription + 1) {
-			number_of_conscriptions_this_year++;
-		}
-		if (age >= soldiers.fealty.age_of_retirement && age < soldiers.fealty.age_of_retirement + 1) {
-			number_of_retirements_this_year++;
-		}
-		if (age >= soldiers.fealty.life_expectancy) {
-			number_of_deaths_this_year++;
-			to_erase.push_back(i);
-			continue;
-		}
-		if (age >= soldiers.fealty.age_of_conscription && age < soldiers.fealty.age_of_retirement) {
-			number_of_military_aged_soldiers++;
-		}
-		if (age >= soldiers.fealty.fertile_age_start && age < soldiers.fealty.fertile_age_end) {
-			number_of_fertile_soldiers++;
-		}
-		if (age >= soldiers.fealty.allowed_pregnancy_age_start && age < soldiers.fealty.allowed_pregnancy_age_end && soldiers.number_of_children < soldiers.fealty.allowed_number_of_children && soldiers.fealty.pregnancies_per_lifetime > soldiers.number_of_pregnancies) {
-			number_of_babies_this_year++;
-			number_of_pregnancies_this_year++;
-			armies[i].number_of_pregnancies++;
-			armies[i].number_of_children++;
-			new_soldiers.push_back(soldiers.fealty);
-			if ((static_cast<double>(rand()) / RAND_MAX) < soldiers.fealty.twinning_chance) {
+	// Parallel processing setup
+	size_t n = armies.size();
+	int worker_threads = std::max(1, threads - 1);
+
+	if (n == 0) {
+		// nothing to do
+		return;
+	}
+
+	if (worker_threads <= 1 || n < static_cast<size_t>(worker_threads)) {
+		// single-threaded path (preserve original behavior)
+		for (size_t i = 0; i < armies.size(); ++i) {
+			auto& soldiers = armies[i];
+			double age = soldiers.get_age_years();
+			if (age >= 9 && age < 10) {
+				number_of_new_fertile_soldiers++;
+			}
+			if (age >= soldiers.fealty.age_of_conscription && age < soldiers.fealty.age_of_conscription + 1) {
+				number_of_conscriptions_this_year++;
+			}
+			if (age >= soldiers.fealty.age_of_retirement && age < soldiers.fealty.age_of_retirement + 1) {
+				number_of_retirements_this_year++;
+			}
+			if (age >= soldiers.fealty.life_expectancy) {
+				number_of_deaths_this_year++;
+				to_erase.push_back(i);
+				continue;
+			}
+			if (age >= soldiers.fealty.age_of_conscription && age < soldiers.fealty.age_of_retirement && soldiers.learning_rate > soldiers.fealty.conscription_minimum_learning_rate) {
+				number_of_military_aged_soldiers++;
+			}
+			if (age >= soldiers.fealty.fertile_age_start && age < soldiers.fealty.fertile_age_end) {
+				number_of_fertile_soldiers++;
+			}
+			if (age >= soldiers.fealty.allowed_pregnancy_age_start && age < soldiers.fealty.allowed_pregnancy_age_end && soldiers.number_of_children < soldiers.fealty.allowed_number_of_children && soldiers.fealty.pregnancies_per_lifetime > soldiers.number_of_pregnancies) {
 				number_of_babies_this_year++;
-				new_soldiers.push_back(soldiers.fealty);
+				number_of_pregnancies_this_year++;
+				armies[i].number_of_pregnancies++;
 				armies[i].number_of_children++;
+				new_soldiers.push_back(soldiers.fealty);
+				if ((static_cast<double>(rand()) / RAND_MAX) < soldiers.fealty.twinning_chance) {
+					number_of_babies_this_year++;
+					new_soldiers.push_back(soldiers.fealty);
+					armies[i].number_of_children++;
+				}
+			}
+		}
+	} else {
+		// multi-threaded path: each thread reads armies and accumulates local results (no mutation)
+		size_t chunk = (n + worker_threads - 1) / worker_threads;
+		std::vector<std::vector<size_t>> to_erase_parts(worker_threads);
+		std::vector<std::vector<policy>> new_soldiers_parts(worker_threads);
+		std::vector<std::vector<size_t>> pregnancy_parent_indices(worker_threads); // indices to increment pregnancies/children
+		std::vector<std::array<double,8>> counters(worker_threads);
+		for (int t = 0; t < worker_threads; ++t) counters[t].fill(0.0);
+
+		std::vector<std::thread> workers;
+		workers.reserve(worker_threads);
+		for (int t = 0; t < worker_threads; ++t) {
+			size_t start = t * chunk;
+			size_t end = std::min(n, start + chunk);
+			workers.emplace_back([start,end,t,&to_erase_parts,&new_soldiers_parts,&pregnancy_parent_indices,&counters]() {
+				for (size_t i = start; i < end; ++i) {
+					auto const& soldiers = armies[i]; // read-only
+					double age = soldiers.get_age_years();
+					if (age >= 9 && age < 10) counters[t][0]++;
+					if (age >= soldiers.fealty.age_of_conscription && age < soldiers.fealty.age_of_conscription + 1) counters[t][1]++;
+					if (age >= soldiers.fealty.age_of_retirement && age < soldiers.fealty.age_of_retirement + 1) counters[t][2]++;
+					if (age >= soldiers.fealty.life_expectancy) {
+						counters[t][3]++;
+						to_erase_parts[t].push_back(i);
+						continue;
+					}
+					if (age >= soldiers.fealty.age_of_conscription && age < soldiers.fealty.age_of_retirement && soldiers.learning_rate > soldiers.fealty.conscription_minimum_learning_rate) counters[t][4]++;
+					if (age >= soldiers.fealty.fertile_age_start && age < soldiers.fealty.fertile_age_end) counters[t][5]++;
+					if (age >= soldiers.fealty.allowed_pregnancy_age_start && age < soldiers.fealty.allowed_pregnancy_age_end && soldiers.number_of_children < soldiers.fealty.allowed_number_of_children && soldiers.fealty.pregnancies_per_lifetime > soldiers.number_of_pregnancies) {
+						counters[t][6]++; // babies
+						counters[t][7]++; // pregnancies
+						// record parent index to increment later on main thread
+						pregnancy_parent_indices[t].push_back(i);
+						new_soldiers_parts[t].push_back(soldiers.fealty);
+						if ((static_cast<double>(rand()) / RAND_MAX) < soldiers.fealty.twinning_chance) {
+							counters[t][6]++;
+							pregnancy_parent_indices[t].push_back(i);
+							new_soldiers_parts[t].push_back(soldiers.fealty);
+						}
+					}
+				}
+			});
+		}
+		for (auto &w : workers) w.join();
+
+		// aggregate results and collect global lists
+		std::vector<size_t> pregnancy_parents_all;
+		for (int t = 0; t < worker_threads; ++t) {
+			number_of_new_fertile_soldiers += counters[t][0];
+			number_of_conscriptions_this_year += counters[t][1];
+			number_of_retirements_this_year += counters[t][2];
+			number_of_deaths_this_year += counters[t][3];
+			number_of_military_aged_soldiers += counters[t][4];
+			number_of_fertile_soldiers += counters[t][5];
+			number_of_babies_this_year += counters[t][6];
+			number_of_pregnancies_this_year += counters[t][7];
+			// merge parts
+			std::move(to_erase_parts[t].begin(), to_erase_parts[t].end(), std::back_inserter(to_erase));
+			std::move(new_soldiers_parts[t].begin(), new_soldiers_parts[t].end(), std::back_inserter(new_soldiers));
+			std::move(pregnancy_parent_indices[t].begin(), pregnancy_parent_indices[t].end(), std::back_inserter(pregnancy_parents_all));
+		}
+
+		// apply pregnancy/children increments for parents that are not dying
+		if (!pregnancy_parents_all.empty()) {
+			// mark deceased for quick lookup
+			std::vector<char> dead_mark(n, 0);
+			for (auto idx : to_erase) if (idx < n) dead_mark[idx] = 1;
+			for (auto idx : pregnancy_parents_all) {
+				if (idx < n && !dead_mark[idx]) {
+					armies[idx].number_of_pregnancies++;
+					armies[idx].number_of_children++;
+				}
 			}
 		}
 	}
 
 	// Remove soldiers who died (from back to front to avoid index shifting)
-	for (auto it = to_erase.rbegin(); it != to_erase.rend(); ++it) {
+		for (auto it = to_erase.rbegin(); it != to_erase.rend(); ++it) {
 		armies.erase(armies.begin() + *it);
 	}
 	// Add new soldiers
 	for (const auto& pol : new_soldiers) {
 		armies.emplace_back(pol);
 	}
+
 	/* print out the data for
 		double number_of_babies_this_year = 0;
 		double number_of_deaths_this_year = 0;
@@ -173,7 +586,16 @@ void add_year()
 	std::cout << "Military Aged Soldiers: " << number_of_military_aged_soldiers << "\n";
 	std::cout << "Fertile Soldiers: " << number_of_fertile_soldiers << "\n";
 	std::cout << "Pregnancies This Year: " << number_of_pregnancies_this_year << "\n";
-	std::cout << "Babies Born This Year: " << number_of_babies_this_year << "\n";
+	std::cout << "Babies Born This Year: " << number_of_babies_this_year << "\n\n";
+
+	std::cout << "Smartest soldier's learning rate: " << smartest_soldier_learning_rate() << "\n";
+	std::cout << "Dumbest soldier's learning rate: " << dumbest_soldier_learning_rate() << "\n";
+	std::cout << "Average maximum intelligence (learning rate) of Earth: " << calculate_average_learning_rate() << "\n\n";
+	std::cout << "Average learning rate is expected to be minimum 120.0 to sustain a good technological civilization over long periods.\n\n";
+
+	print_fealty_intelligence_distribution();
+	print_most_intelligent_policy();
+	print_alarm_if_mentally_retarded();
 
 	std::vector<int> number_of_current_soldiers_in_policy(available_policies.size(), 0);
 	for (auto z : armies) {
@@ -187,59 +609,36 @@ void add_year()
 	for (size_t j = 0; j < available_policies.size(); ++j) {
 		std::cout << "Number of soldiers in policy " << available_policies[j].name << ": " << number_of_current_soldiers_in_policy[j] << "\n";
 	}
+
+	// Check for random wars
+	if (random_wars_enabled) {
+		for (const auto& pol : available_policies) {
+			if (!pol.pacifist) {
+				if ((static_cast<double>(rand()) / RAND_MAX) < pol.chance_to_declare_war_per_year) {
+					random_war_kill_most_losers_kill_some_winners();
+					break; // Only one war per year
+				}
+			}
+		}
+	}
 }
 
-void help()
+void random_genocide(policy pol, policy target)
 {
-	std::cout << "Type commands to interact with the simulation:\n";
-	std::cout << "Type 'help' to see this message again.\n";
-	std::cout << "Type STANDARD_WAR to advance 50 years with USA and ENEMY policies and simulate a war between them.\n";
-	std::cout << "Press Enter to advance one year in the simulation, \n";
-	std::cout << "type policy <name> to add a new policy type, \n";
-	std::cout << "type add <number> <policy> to add soldiers with fealty sworn to a specific policy, \n";
-	std::cout << "type sex_age <policy> <age> to set the reproductive age for a policy, \n";
-	std::cout << "type conscription_age <policy> <age> to set the conscription age for a policy, \n";
-	std::cout << "type retirement_age <policy> <age> to set the retirement age for a policy, \n";
-	std::cout << "type life_expectancy <policy> <age> to set the life expectancy for a policy, \n";
-	std::cout << "type fertility_range <policy> <start_age> <end_age> to set the fertility range for a policy, \n";
-	std::cout << "type pregnancies_per_lifetime <policy> <number> to set the number of pregnancies per lifetime for a policy, \n";
-	std::cout << "type number_of_children <policy> <number> to set the allowed number of children per soldier for a policy, \n";
-	std::cout << "or type war <policy1> <policy2> to simulate a war between two policies.\n";
-}
-
-void add_two_standard_policies()
-{
-	policy usa_policy;
-	usa_policy.name = "USA";
-	usa_policy.age_of_conscription = 18;
-	usa_policy.age_of_retirement = 45;
-	usa_policy.life_expectancy = 79;
-	usa_policy.fertile_age_start = 15;
-	usa_policy.fertile_age_end = 45;
-	usa_policy.allowed_pregnancy_age_start = 15;
-	usa_policy.allowed_pregnancy_age_end = 45;
-	usa_policy.allowed_number_of_children = 10;
-	usa_policy.pregnancies_per_lifetime = 5;
-
-	available_policies.push_back(usa_policy);
-	policy enemy_policy;
-	enemy_policy.name = "ENEMY";
-	enemy_policy.age_of_conscription = 13;
-	enemy_policy.age_of_retirement = 60;
-	enemy_policy.life_expectancy = 65;
-	enemy_policy.fertile_age_start = 10;
-	enemy_policy.fertile_age_end = 50;
-	enemy_policy.allowed_pregnancy_age_start = 10;
-	enemy_policy.allowed_pregnancy_age_end = 50;
-	enemy_policy.allowed_number_of_children = 300;
-	enemy_policy.pregnancies_per_lifetime = 30;
-	available_policies.push_back(enemy_policy);
+	std::vector<size_t> to_erase;
+	for (size_t i = 0; i < armies.size(); ++i) {
+		auto& soldiers = armies[i];
+		double age = soldiers.get_age_years();
+		if (age >= pol.minimum_age_genocide && age <= pol.maximum_age_genoicide && soldiers.fealty.name == target.name) {
+			to_erase.push_back(i);
+		}
+	}
 }
 
 int main()
 {
 	setup();
-	for (int i = 0; i < 10; i++) {
+	for (int i = 0; i < 1; i++) {
 		armies.emplace_back(global_policy);
 	}
 	std::string command;
@@ -254,6 +653,25 @@ int main()
 			new_policy.name = policy_name;
 			available_policies.push_back(new_policy);
 			std::cout << "Added new policy: " << policy_name << "\n";
+		}
+		// allow random wars
+		else if (command.rfind("random_war", 0) == 0) {
+			if(!random_wars_enabled)
+			std::cout << "Random wars enabled.\n";
+			else std::cout << "Random wars disabled.\n";
+			random_wars_enabled = !random_wars_enabled;
+		}
+		else if (command.rfind("threads ", 0) == 0) {
+			std::istringstream iss(command);
+			std::string cmd;
+			int num_threads = 4;
+			if (iss >> cmd >> num_threads) {
+				threads = num_threads;
+				std::cout << "Set number of threads to " << threads << ".\n";
+			}
+			else {
+				std::cout << "Invalid threads syntax. Use: threads <number>\n";
+			}
 		}
 		// Check for war command (uses last-token split: policy2 is last token, policy1 is the rest)
 		else if (command.rfind("war ", 0) == 0) {
@@ -291,8 +709,7 @@ int main()
 				if (policy2_name == global_policy.name) policy2 = &global_policy;
 
 				if (policy1 && policy2) {
-					policy winner = who_wins_conventional_war(*policy1, *policy2);
-					std::cout << "The winner of the war between " << policy1_name << " and " << policy2_name << " is " << winner.name << ".\n";
+					war_kill_most_losers_kill_some_winners(*policy1, *policy2);
 				}
 				else {
 					std::cout << "One or both policies not found.\n";
@@ -330,6 +747,7 @@ int main()
 				}
 			}
 		}
+		// Allow random wars
 		// Add two standard policies
 		else if (command == "STANDARD_WAR") {
 			add_two_standard_policies();
@@ -476,6 +894,79 @@ int main()
 					if (pol.name == policy_name) {
 						pol.age_of_retirement = age;
 						std::cout << "Set retirement age for " << policy_name << " to " << age << ".\n";
+						found = true;
+						break;
+					}
+				}
+				if (!found) std::cout << "Policy '" << policy_name << "' not found.\n";
+			}
+		}
+		// set intelligence (policy may contain spaces; last two tokens are median and range)
+		else if (command.rfind("intelligence", 0) == 0) {
+			std::istringstream iss(command);
+			std::string cmd;
+			iss >> cmd;
+			std::string rest;
+			std::getline(iss, rest);
+			if (!rest.empty() && rest.front() == ' ') rest.erase(0, 1);
+			std::istringstream iss2(rest);
+			std::vector<std::string> tokens;
+			std::string tok;
+			while (iss2 >> tok) tokens.push_back(tok);
+			if (tokens.size() < 3) {
+				std::cout << "Invalid intelligence syntax. Use: intelligence <policy> <median> <range>\n";
+			}
+			else {
+				std::string range_str = tokens.back();
+				std::string median_str = tokens[tokens.size() - 2];
+				std::string policy_name;
+				for (size_t i = 0; i + 2 < tokens.size(); ++i) {
+					if (i) policy_name += " ";
+					policy_name += tokens[i];
+				}
+				double median = std::stod(median_str);
+				double range = std::stod(range_str);
+				bool found = false;
+				for (auto& pol : available_policies) {
+					if (pol.name == policy_name) {
+						pol.learning_rate_median = median;
+						pol.learning_rate_range = range;
+						std::cout << "Set intelligence for " << policy_name << " to median " << median << " and range " << range << ".\n";
+						found = true;
+						break;
+					}
+				}
+				if (!found) std::cout << "Policy '" << policy_name << "' not found.\n";
+			}
+		}
+		//set war chance
+		else if (command.rfind("warchoice", 0) == 0) {
+			std::istringstream iss(command);
+			std::string cmd;
+			iss >> cmd;
+			std::string rest;
+			std::getline(iss, rest);
+			if (!rest.empty() && rest.front() == ' ') rest.erase(0, 1);
+			std::istringstream iss2(rest);
+			std::vector<std::string> tokens;
+			std::string tok;
+			while (iss2 >> tok) tokens.push_back(tok);
+			if (tokens.size() < 2) {
+				std::cout << "Invalid warchoice syntax. Use: warchoice <policy> <chance>\n";
+			}
+			else {
+				std::string chance_str = tokens.back();
+				std::string policy_name;
+				for (size_t i = 0; i + 1 < tokens.size(); ++i) {
+					if (i) policy_name += " ";
+					policy_name += tokens[i];
+				}
+				double chance = std::stod(chance_str);
+				bool found = false;
+				for (auto& pol : available_policies) {
+					if (pol.name == policy_name) {
+						pol.chance_to_declare_war_per_year = chance;
+						std::cout << "Set war chance for " << policy_name << " to " << chance << "% per year.\n";
 						found = true;
 						break;
 					}
