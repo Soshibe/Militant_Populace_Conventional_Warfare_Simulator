@@ -37,7 +37,7 @@ public:
 	double conscription_minimum_learning_rate = 0.0;
 	double chance_to_declare_war_per_year = 0.01;
 	double minimum_age_genocide = 0;
-	double maximum_age_genoicide = 110;
+	double maximum_age_genocide = 110;
 	double chance_to_commit_genocide_during_war_success = 80.0;
 	bool pacifist = false;
 };
@@ -266,7 +266,7 @@ void add_two_standard_policies()
 	usa_policy.learning_rate_median = 70.0;
 	usa_policy.learning_rate_range = 50.0;
 	usa_policy.chance_to_declare_war_per_year = 0.05;
-	usa_policy.maximum_age_genoicide = 65;
+	usa_policy.maximum_age_genocide = 65;
 	usa_policy.minimum_age_genocide = 15;
 
 	available_policies.push_back(usa_policy);
@@ -285,7 +285,7 @@ void add_two_standard_policies()
 	enemy_policy.learning_rate_range = 25.0;
 	enemy_policy.conscription_minimum_learning_rate = 0.0;
 	enemy_policy.chance_to_declare_war_per_year = 0.01;
-	enemy_policy.maximum_age_genoicide = 70;
+	enemy_policy.maximum_age_genocide = 70;
 	enemy_policy.minimum_age_genocide = 7;
 	available_policies.push_back(enemy_policy);
 }
@@ -629,7 +629,7 @@ void random_genocide(policy pol, policy target)
 	for (size_t i = 0; i < armies.size(); ++i) {
 		auto& soldiers = armies[i];
 		double age = soldiers.get_age_years();
-		if (age >= pol.minimum_age_genocide && age <= pol.maximum_age_genoicide && soldiers.fealty.name == target.name) {
+		if (age >= pol.minimum_age_genocide && age <= pol.maximum_age_genocide && soldiers.fealty.name == target.name) {
 			to_erase.push_back(i);
 		}
 	}
@@ -1125,11 +1125,9 @@ int main()
 				if (!found) std::cout << "Policy '" << policy_name << "' not found.\n";
 			}
 		}
-		// Help command
 		else if (command == "help") {
 			help();
 		}
-		// Advance one year
 		else {
 			add_year();
 			std::cout << "Advanced one year in the simulation. Current simulation age: " << simulation_age_years << " years.\n";
